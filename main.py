@@ -1,11 +1,26 @@
 import os
 import logging
+import pandas as pd
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler, ContextTypes
-from main import combine_excels  # این تابع باید خروجی combined.xlsx بسازه
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    filters,
+)
+
+# ---------------- تابع ترکیب ----------------
+def combine_excels(file_list, output_file):
+    dfs = []
+    for f in file_list:
+        dfs.append(pd.read_excel(f))
+    combined = pd.concat(dfs, ignore_index=True)
+    combined.to_excel(output_file, index=False)
 
 # ---------------- تنظیمات ----------------
-TOKEN = "توکن_ربات_تو_اینجا"
+TOKEN = os.environ.get("TOKEN")  # توکن از Environment Variable میاد
 UPLOAD_DIR = "uploads"
 if not os.path.exists(UPLOAD_DIR):
     os.makedirs(UPLOAD_DIR)
@@ -29,7 +44,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if query.data == "excel":
         context.user_data["files"] = []  # لیست فایل‌های کاربر
-        await query.message.reply_text("فایل‌های اکسل خودت رو یکی‌یکی بفرست. وقتی تموم شد، بنویس /done")
+        await query.message.reply_text(
+            "📂 فایل‌های اکسل خودت رو یکی‌یکی بفرست.\nوقتی تموم شد روی دکمه زیر بزن:",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("✅ ترکیب کن", callback_data="done")]]
+            )
+        )
+
+    elif query.data == "done":
+        await done(update, context)
 
 # ---------------- دریافت فایل ----------------
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -37,7 +60,6 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file_path = os.path.join(UPLOAD_DIR, update.message.document.file_name)
     await file.download_to_drive(file_path)
 
-    # ذخیره اسم فایل برای همین کاربر
     if "files" not in context.user_data:
         context.user_data["files"] = []
     context.user_data["files"].append(file_path)
@@ -48,22 +70,19 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     files = context.user_data.get("files", [])
     if not files:
-        await update.message.reply_text("هیچ فایلی نفرستادی! اول فایل‌هات رو آپلود کن.")
+        await update.callback_query.message.reply_text("❌ هیچ فایلی نفرستادی! اول فایل‌هات رو آپلود کن.")
         return
 
-    await update.message.reply_text("⏳ در حال ترکیب فایل‌ها...")
+    await update.callback_query.message.reply_text("⏳ در حال ترکیب فایل‌ها...")
 
     try:
         output_file = "combined.xlsx"
         combine_excels(files, output_file)
-
-        # فرستادن فایل خروجی
-        await update.message.reply_document(document=open(output_file, "rb"))
+        await update.callback_query.message.reply_document(document=open(output_file, "rb"))
     except Exception as e:
         logger.error(e)
-        await update.message.reply_text("⚠️ مشکلی پیش اومد!")
+        await update.callback_query.message.reply_text("⚠️ مشکلی پیش اومد!")
     finally:
-        # پاک کردن فایل‌های آپلودی برای تمیز موندن
         for f in files:
             if os.path.exists(f):
                 os.remove(f)
@@ -72,11 +91,9 @@ async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------------- اجرای ربات ----------------
 def main():
     app = Application.builder().token(TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
-    app.add_handler(CommandHandler("done", done))
 
     print("ربات روشن شد...")
     app.run_polling()
